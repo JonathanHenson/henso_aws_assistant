@@ -1,0 +1,187 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+
+Globals:
+  Function:
+    Runtime: python3.9
+
+Resources:
+  IntentDataLoaderFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: s3://hensos-personal-assistant/intents/intents-deployment-package.zip
+      Handler: load_all_intents.lambda_handler
+      Description: Loads intent data into the Lex bot
+      Timeout: 10
+      Role: !GetAtt IntentDataLoaderFunctionRole.Arn
+      Policies:
+        - LexBotPolicy:
+            BotName: !Ref HensoPersonalAssistantChatBot
+      Environment:
+        Variables:
+          bot_name: !Ref HensoPersonalAssistantChatBot
+          intent_table: !Ref IntentDatabase
+
+  IntentDataLoaderFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: IntentDataLoaderFunctionRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: IntentDataLoaderFunctionPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'lex:PutIntent'
+                  - 'lex:GetIntent'
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - 'dynamodb:GetItem'
+                  - 'dynamodb:Scan'
+                Resource: !GetAtt IntentDatabase.Arn
+
+  IntentDataLoader:
+    Type: Custom::IntentDataLoader
+    DependsOn:
+      - IntentDataLoaderFunction
+      - IntentDataLoaderFunctionRole
+    Properties:
+      service_token: !GetAtt IntentDataLoaderFunction.Arn
+      bot_name: !Ref HensoPersonalAssistantChatBot
+      table_name: !Ref IntentDatabase
+
+  HensoPersonalAssistantChatBot:
+    Type: 'AWS::Lex::Bot'
+    Properties:
+      Name: hensoPersonalAssistantChatEngine
+      Description: Henso's AI's chat functionality
+      IdleSessionTTLInSeconds: 300
+      RoleArn: !GetAtt IntentDataLoaderFunctionRole.Arn
+      DataPrivacy:
+        ChildDirected: False
+      BotLocales:
+        - LocaleId: en_US
+          NluConfidenceThreshold: 0.40
+          VoiceSettings:
+            VoiceId: Matthew
+          Intents:
+            - Name: "FallbackIntent"
+              Description: "Default intent when no other intent matches"
+              ParentIntentSignature: "AMAZON.FallbackIntent"
+      
+
+  IntentDatabase:
+    Type: 'AWS::DynamoDB::Table'
+    Properties:
+      TableName: hensosAIIntentDB
+      AttributeDefinitions:
+        - AttributeName: intent_name
+          AttributeType: S
+        - AttributeName: intent_data
+          AttributeType: S
+      KeySchema:
+        - AttributeName: intent_name
+          KeyType: HASH
+      ProvisionedThroughput:
+        ReadCapacityUnits: 5
+        WriteCapacityUnits: 5
+      GlobalSecondaryIndexes:
+        - IndexName: intent_data_index
+          KeySchema:
+            - AttributeName: intent_data
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+          ProvisionedThroughput:
+            ReadCapacityUnits: 5
+            WriteCapacityUnits: 5  
+
+  AddIntentFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: AddIntentFunction
+      Runtime: python3.9
+      Handler: add_intent.lambda_handler
+      CodeUri: s3://hensos-personal-assistant/intents/intents-deployment-package.zip
+      Environment:
+        Variables:
+          INTENT_TABLE_NAME: !Ref IntentDatabase
+      Events:
+        AddIntentAPI:
+          Type: Api
+          Properties:
+            Path: /intents
+            Method: post
+
+  GetIntentFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: GetIntentFunction
+      Runtime: python3.9
+      Handler: get_intent.lambda_handler
+      CodeUri: s3://hensos-personal-assistant/intents/intents-deployment-package.zip
+      Environment:
+        Variables:
+          INTENT_TABLE_NAME: !Ref IntentDatabase
+      Events:
+        GetIntentAPI:
+          Type: Api
+          Properties:
+            Path: /intents/{intent_name}
+            Method: get          
+
+  UpdateIntentFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: UpdateIntentFunction
+      Handler: update_intent.lambda_handler
+      CodeUri: s3://hensos-personal-assistant/intents/intents-deployment-package.zip
+      Environment:
+        Variables:
+          INTENT_TABLE_NAME: !Ref IntentDatabase
+      Events:
+        UpdateIntentAPI:
+          Type: Api
+          Properties:
+            Path: /intents/{intent_name}
+            Method: put
+
+  DeleteIntentFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: DeleteIntentFunction
+      Runtime: python3.9
+      Handler: delete_intent.lambda_handler
+      CodeUri: s3://hensos-personal-assistant/intents/intents-deployment-package.zip
+
+  GetAllIntentsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: GetAllIntentsFunction
+      Runtime: python3.9
+      Handler: get_all_intents.lambda_handler
+      CodeUri: s3://hensos-personal-assistant/intents/intents-deployment-package.zip
+      Environment:
+        Variables:
+          INTENT_TABLE_NAME: !Ref IntentDatabase
+      Events:
+        GetAllIntentsAPI:
+          Type: Api
+          Properties:
+            Path: /intents
+            Method: get                     
+
+Outputs:
+  BotName:
+    Value: !Ref HensoPersonalAssistantChatBot
+    Export:
+      Name: BotName
